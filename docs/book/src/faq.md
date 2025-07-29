@@ -140,7 +140,7 @@ type StructName struct {
 
 ### What happens in this scenario?
 
-- Users will receive an error notification from the Kubernetes API if they attempt to create a CRD with an invalid timeField value.
+- Users will receive an error notification from the Kubernetes API if they attempt to create a resource with an invalid timeField value.
 - On the developer side, the string value needs to be parsed manually before use.
 
 ### Is there a better approach?
