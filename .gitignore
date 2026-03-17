@@ -13,12 +13,12 @@ docs/book/src/docs
 \#*#
 *.swp
 
-# Skip bazel dirs
-/bazel-*
-
 # skip bin dirs
 **/bin
 **/testbin
+
+# skip GoReleaser dist directory (root level only, not testdata)
+/dist
 
 # skip .out files (coverage tests)
 *.out
@@ -31,3 +31,5 @@ docs/book/src/docs
 
 ## Skip testdata files that generate by tests using TestContext
 **/e2e-*/**
+# Optional rendered chart output (e.g. from make yamllint-helm when debugging)
+testdata/.helm-rendered.yaml

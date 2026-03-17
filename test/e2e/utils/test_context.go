@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	//nolint:staticcheck
 	. "github.com/onsi/ginkgo/v2"
@@ -32,13 +33,13 @@ import (
 )
 
 const (
-	certmanagerVersion = "v1.19.1"
+	certmanagerVersion = "v1.20.0"
 	certmanagerURLTmpl = "https://github.com/cert-manager/cert-manager/releases/download/%s/cert-manager.yaml"
 
 	defaultKindCluster = "kind"
 	defaultKindBinary  = "kind"
 
-	prometheusOperatorVersion = "v0.85.0"
+	prometheusOperatorVersion = "v0.89.0"
 	prometheusOperatorURL     = "https://github.com/prometheus-operator/prometheus-operator/" +
 		"releases/download/%s/bundle.yaml"
 )
@@ -167,12 +168,18 @@ func (t *TestContext) InstallCertManager() error {
 	}
 	// Wait for cert-manager-webhook to be ready, which can take time if cert-manager
 	// was re-installed after uninstalling on a cluster.
-	_, err := t.Kubectl.Wait(false, "deployment.apps/cert-manager-webhook",
+	if _, err := t.Kubectl.Wait(false, "deployment.apps/cert-manager-webhook",
 		"--for", "condition=Available",
 		"--namespace", "cert-manager",
 		"--timeout", "5m",
-	)
-	return err
+	); err != nil {
+		return err
+	}
+
+	// Additional wait for webhook TLS to be fully initialized
+	// The webhook needs time after deployment is ready to generate and serve valid certificates
+	time.Sleep(10 * time.Second)
+	return nil
 }
 
 // UninstallCertManager uninstalls the cert manager bundle.
@@ -186,7 +193,8 @@ func (t *TestContext) UninstallCertManager() {
 // InstallPrometheusOperManager installs the prometheus manager bundle.
 func (t *TestContext) InstallPrometheusOperManager() error {
 	url := t.makePrometheusOperatorURL()
-	_, err := t.Kubectl.Command("create", "-f", url)
+	// Use server-side apply to handle large CRD annotations
+	_, err := t.Kubectl.Command("apply", "--server-side", "-f", url)
 	return err
 }
 
@@ -374,9 +382,19 @@ func (t *TestContext) AllowProjectBeMultiGroup() error {
 
 // InstallHelm installs Helm in the e2e server.
 func (t *TestContext) InstallHelm() error {
-	helmInstallScript := "https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3"
+	// Check if Helm is already installed
+	checkCmd := exec.Command("helm", "version")
+	_, err := t.Run(checkCmd)
+	if err == nil {
+		// Helm is already installed, skip installation
+		_, _ = fmt.Fprintf(GinkgoWriter, "Helm is already installed, skipping installation\n")
+		return nil
+	}
+
+	// Install Helm if not found
+	helmInstallScript := "https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-4"
 	cmd := exec.Command("bash", "-c", fmt.Sprintf("curl -fsSL %s | bash", helmInstallScript))
-	_, err := t.Run(cmd)
+	_, err = t.Run(cmd)
 	if err != nil {
 		return err
 	}
@@ -391,11 +409,13 @@ func (t *TestContext) InstallHelm() error {
 }
 
 // UninstallHelmRelease removes the specified Helm release from the cluster.
+// Uses the chart name (project name) as the release name, which is standard Helm practice.
+// Note: With crd.keep=true (default), CRDs are preserved after uninstall.
+// Use DeleteCRDs() to clean them up after verifying they persisted.
 func (t *TestContext) UninstallHelmRelease() error {
 	ns := fmt.Sprintf("e2e-%s-system", t.TestSuffix)
-	cmd := exec.Command("helm", "uninstall",
-		fmt.Sprintf("release-%s", t.TestSuffix),
-		"--namespace", ns)
+	releaseName := fmt.Sprintf("e2e-%s", t.TestSuffix)
+	cmd := exec.Command("helm", "uninstall", releaseName, "--namespace", ns)
 
 	_, err := t.Run(cmd)
 	if err != nil {
@@ -412,9 +432,39 @@ func (t *TestContext) EditHelmPlugin() error {
 }
 
 // HelmInstallRelease is for running `helm install`
+// Uses the chart name (project name) as the release name, which is standard Helm practice.
+// When release name matches chart name, chart.fullname simplifies to just the chart name,
+// preserving kustomize resource naming.
 func (t *TestContext) HelmInstallRelease() error {
-	cmd := exec.Command("helm", "install", fmt.Sprintf("release-%s", t.TestSuffix), "dist/chart",
-		"--namespace", fmt.Sprintf("e2e-%s-system", t.TestSuffix))
+	return t.HelmInstallReleaseWithOptions(true) // Default: crd.keep=true
+}
+
+// HelmInstallReleaseWithOptions is for running `helm install` with configurable options
+// crdKeep controls whether CRDs are preserved on helm uninstall (helm.sh/resource-policy: keep)
+func (t *TestContext) HelmInstallReleaseWithOptions(crdKeep bool) error {
+	releaseName := fmt.Sprintf("e2e-%s", t.TestSuffix)
+	// Set the image to match what was built (format: e2e-test/controller-manager:suffix)
+	// Helm chart uses manager.image.repository and manager.image.tag
+	// --create-namespace ensures the namespace exists before installing
+	cmd := exec.Command("helm", "install", releaseName, "dist/chart",
+		"--namespace", fmt.Sprintf("e2e-%s-system", t.TestSuffix),
+		"--create-namespace",
+		"--set", fmt.Sprintf("manager.image.repository=%s", "e2e-test/controller-manager"),
+		"--set", fmt.Sprintf("manager.image.tag=%s", t.TestSuffix),
+		"--set", fmt.Sprintf("crd.keep=%t", crdKeep))
+	_, err := t.Run(cmd)
+	return err
+}
+
+// HelmUpgradeReleaseWithReplicas runs `helm upgrade` with manager.replicas set.
+// Uses --reuse-values so existing image and other settings are preserved.
+func (t *TestContext) HelmUpgradeReleaseWithReplicas(replicas int) error {
+	releaseName := fmt.Sprintf("e2e-%s", t.TestSuffix)
+	ns := fmt.Sprintf("e2e-%s-system", t.TestSuffix)
+	cmd := exec.Command("helm", "upgrade", releaseName, "dist/chart",
+		"--namespace", ns,
+		"--reuse-values",
+		"--set", fmt.Sprintf("manager.replicas=%d", replicas))
 	_, err := t.Run(cmd)
 	return err
 }

@@ -19,11 +19,12 @@ package plugin
 import (
 	"fmt"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/util/validation"
+
 	"sigs.k8s.io/kubebuilder/v4/pkg/config"
-	"sigs.k8s.io/kubebuilder/v4/pkg/internal/validation"
 )
 
 // KeyFor returns a Plugin's unique identifying string.
@@ -48,10 +49,8 @@ func GetPluginKeyForConfig(pluginChain []string, p Plugin) string {
 	pluginKey := KeyFor(p)
 
 	// Try exact match first
-	for _, key := range pluginChain {
-		if key == pluginKey {
-			return pluginKey
-		}
+	if slices.Contains(pluginChain, pluginKey) {
+		return pluginKey
 	}
 
 	// No exact match. Try matching by base name + version to find bundled plugins.
@@ -60,8 +59,8 @@ func GetPluginKeyForConfig(pluginChain []string, p Plugin) string {
 
 	// Get base name (part before first dot): "deploy-image.go.kubebuilder.io" -> "deploy-image"
 	baseName := pluginName
-	if idx := strings.Index(pluginName, "."); idx != -1 {
-		baseName = pluginName[:idx]
+	if before, _, ok := strings.Cut(pluginName, "."); ok {
+		baseName = before
 	}
 
 	for _, key := range pluginChain {
@@ -72,8 +71,8 @@ func GetPluginKeyForConfig(pluginChain []string, p Plugin) string {
 
 		// Check if this key matches the base name
 		keyBaseName := name
-		if idx := strings.Index(name, "."); idx != -1 {
-			keyBaseName = name[:idx]
+		if before, _, ok := strings.Cut(name, "."); ok {
+			keyBaseName = before
 		}
 
 		if keyBaseName == baseName {
@@ -162,8 +161,8 @@ func CommonSupportedProjectVersions(plugins ...Plugin) []config.Version {
 	}
 
 	// Sort the output to guarantee consistency
-	sort.Slice(supportedProjectVersions, func(i int, j int) bool {
-		return supportedProjectVersions[i].Compare(supportedProjectVersions[j]) == -1
+	slices.SortStableFunc(supportedProjectVersions, func(a, b config.Version) int {
+		return a.Compare(b)
 	})
 
 	return supportedProjectVersions

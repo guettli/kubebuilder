@@ -1,7 +1,9 @@
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/kubernetes-sigs/kubebuilder/badge)](https://scorecard.dev/viewer/?uri=github.com/kubernetes-sigs/kubebuilder)
 [![Lint](https://github.com/kubernetes-sigs/kubebuilder/actions/workflows/lint.yml/badge.svg)](https://github.com/kubernetes-sigs/kubebuilder/actions/workflows/lint.yml)
 [![Go Report Card](https://goreportcard.com/badge/sigs.k8s.io/kubebuilder)](https://goreportcard.com/report/sigs.k8s.io/kubebuilder)
 [![Coverage Status](https://coveralls.io/repos/github/kubernetes-sigs/kubebuilder/badge.svg?branch=master)](https://coveralls.io/github/kubernetes-sigs/kubebuilder?branch=master)
-[![Latest release](https://badgen.net/github/release/kubernetes-sigs/kubebuilder)](https://github.com/kubernetes-sigs/kubebuilder/releases)
+[![Latest release](https://img.shields.io/github/v/release/kubernetes-sigs/kubebuilder)](https://github.com/kubernetes-sigs/kubebuilder/releases)
+[![Go Reference](https://pkg.go.dev/badge/sigs.k8s.io/kubebuilder/v4.svg)](https://pkg.go.dev/sigs.k8s.io/kubebuilder/v4)
 
 ## Kubebuilder
 
@@ -35,8 +37,6 @@ Follow the [instructions](https://book.kubebuilder.io/quick-start.html#installat
 ## Getting Started
 
 See the [Getting Started](https://book.kubebuilder.io/quick-start.html) documentation.
-
-![Quick Start](docs/gif/kb-demo.v3.11.1.svg)
 
 Also, ensure that you check out the [Deploy Image](./docs/book/src/plugins/available/deploy-image-plugin-v1-alpha.md)
 Plugin. This plugin allows users to scaffold API/Controllers to deploy and manage an

@@ -87,14 +87,14 @@ func (s *apiScaffolder) Scaffold() error {
 	boilerplate, err := afero.ReadFile(s.fs.FS, boilerplatePath)
 	if err != nil {
 		if errors.Is(err, afero.ErrFileNotFound) {
-			log.Warn("Unable to find boilerplate file. "+
+			log.Warn("unable to find boilerplate file. "+
 				"This file is used to generate the license header in the project.\n"+
-				"Note that controller-gen will also use this. Therefore, ensure that you "+
-				"add the license file or configure your project accordingly.",
+				"Note that controller-gen will also use this. Ensure that you "+
+				"add the license file or configure your project accordingly",
 				"file_path", boilerplatePath, "error", err)
 			boilerplate = []byte("")
 		} else {
-			return fmt.Errorf("error scaffolding API/controller: unable to load boilerplate: %w", err)
+			return fmt.Errorf("error scaffolding API/controller: failed to load boilerplate: %w", err)
 		}
 	}
 
@@ -214,7 +214,7 @@ func (s *apiScaffolder) updateControllerCode(controller controllers.Controller) 
 		// TODO: improve it to be an spec in the sample and api instead so that
 		// users can change the values
 		var res string
-		for _, value := range strings.Split(s.command, ",") {
+		for value := range strings.SplitSeq(s.command, ",") {
 			res += fmt.Sprintf(" \"%s\",", strings.TrimSpace(value))
 		}
 		// remove the latest ,
@@ -331,7 +331,7 @@ const portTemplate = `
 						}},`
 
 const recorderTemplate = `
-		Recorder: mgr.GetEventRecorderFor("%s-controller"),`
+		Recorder: mgr.GetEventRecorder("%s-controller"),`
 
 const envVarTemplate = `
         - name: %s_IMAGE

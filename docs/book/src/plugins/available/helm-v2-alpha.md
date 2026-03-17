@@ -30,7 +30,8 @@ The **helm/v2-alpha** plugin converts the bundle (`dist/install.yaml`) into a He
 - **Preserves Customizations**: Keeps env vars, labels, annotations, and patches.
 - **Structured Output**: Templates follow your `config/` directory layout.
 - **Smart Values**: `values.yaml` includes only actual configurable parameters.
-- **File Preservation**: Manual edits in `values.yaml`, `Chart.yaml`, `_helpers.tpl` are kept unless `--force` is used.
+- **File Preservation**: `Chart.yaml` is never overwritten. Without `--force`, `values.yaml`, `NOTES.txt`, `_helpers.tpl`, `.helmignore` and `.github/workflows/test-chart.yml` are preserved.
+- **Handles Custom Resources**: Resources not matching standard layout (custom Services, ConfigMaps, etc.) are placed in `templates/extras/` with proper templating.
 
 ## When to Use It
 
@@ -54,7 +55,7 @@ make build-installer IMG=<registry>/<project:tag>
 # Create Helm chart from kustomize output
 kubebuilder edit --plugins=helm/v2-alpha
 
-# Overwrite preserved files if needed
+# Regenerate preserved files (Chart.yaml never overwritten)
 kubebuilder edit --plugins=helm/v2-alpha --force
 ```
 
@@ -78,13 +79,14 @@ kubebuilder edit --plugins=helm/v2-alpha \
 The plugin creates a chart layout that matches your `config/`:
 
 ```shell
-<output>/chart/
+<output-dir>/chart/
 ├── Chart.yaml
 ├── values.yaml
 ├── .helmignore
 └── templates/
+    ├── NOTES.txt
     ├── _helpers.tpl
-    ├── rbac/                    # Individual RBAC files
+    ├── rbac/                    # Individual RBAC files (examples)
     │   ├── controller-manager.yaml
     │   ├── leader-election-role.yaml
     │   ├── leader-election-rolebinding.yaml
@@ -96,27 +98,45 @@ The plugin creates a chart layout that matches your `config/`:
     │   ├── memcached-admin-role.yaml
     │   ├── memcached-editor-role.yaml
     │   ├── memcached-viewer-role.yaml
+    │   ├── busybox-admin-role.yaml
+    │   ├── busybox-editor-role.yaml
+    │   ├── busybox-viewer-role.yaml
     │   └── ...
-    ├── crd/                     # Individual CRD files
-    │   ├── memcacheds.example.com.testproject.org.yaml
+    ├── crd/                     # Individual CRD files (examples)
     │   ├── busyboxes.example.com.testproject.org.yaml
-    │   ├── wordpresses.example.com.testproject.org.yaml
     │   └── ...
     ├── cert-manager/
     │   ├── metrics-certs.yaml
-    │   ├── serving-cert.yaml
-    │   └── selfsigned-issuer.yaml
+    │   ├── selfsigned-issuer.yaml
+    │   └── serving-cert.yaml
     ├── manager/
     │   └── manager.yaml
-    ├── service/
-    │   └── service.yaml
+    ├── metrics/
+    │   └── controller-manager-metrics-service.yaml
     ├── webhook/
-    │   └── validating-webhook-configuration.yaml
-    └── prometheus/
-        └── servicemonitor.yaml
+    │   ├── validating-webhook-configuration.yaml
+    │   └── webhook-service.yaml
+    ├── monitoring/
+    │   └── servicemonitor.yaml
+    └── extras/                  # Custom resources (if any)
+        ├── my-service.yaml
+        └── my-config.yaml
 ```
 
-<aside>
+<aside class="note">
+<H1>Chart Structure</H1>
+
+The chart structure mirrors your project's resources:
+
+- Standard resources (RBAC, manager, webhooks, CRDs) go into dedicated template directories
+- Other resources (Services, ConfigMaps, Secrets) go into `templates/extras/` with Helm templating
+- **Custom Resource instances** from `config/samples/` are **not included in the chart**
+
+By default, `make build-installer` does not include samples in `dist/install.yaml`. If you manually add CR instances to your kustomize output, the Helm plugin will ignore them.
+
+</aside>
+
+<aside class="note">
 <H1> Why CRDs are added under templates? </H1>
 
 Although [Helm best practices](https://helm.sh/docs/chart_best_practices/custom_resource_definitions/#method-1-let-helm-do-it-for-you) recommend placing CRDs under a top-level `crds/` directory, the Kubebuilder Helm plugin intentionally places them under `templates/crd`.
@@ -137,9 +157,19 @@ In short:
 - **Helm `crds/` directory** → one-time install only, no upgrades.
 - **Kubebuilder `templates/crd`** → CRDs managed like other manifests, upgrades included.
 
-This design choice prioritizes correctness and maintainability over Helm’s default convention,
+This design choice prioritizes correctness and maintainability over Helm's default convention,
 while leaving room for future improvements (such as scaffolding separate charts for APIs and controllers).
 </aside>
+
+## Post-Install Notes
+
+The plugin generates a `NOTES.txt` template that displays helpful information after `helm install` or `helm upgrade`:
+
+- Installation confirmation with release name and namespace
+- Commands to verify the deployment (kubectl get pods, CRDs)
+- How to get more information using helm commands
+
+The `NOTES.txt` file is preserved on subsequent runs (unless `--force` is used), allowing you to customize the post-install message for your users.
 
 ## Values Configuration
 
@@ -149,8 +179,17 @@ Namespace creation is not managed by the chart; use Helm's `--namespace` and `--
 **Example**
 
 ```yaml
-# Configure the controller manager deployment
-controllerManager:
+## String to partially override chart.fullname template (will maintain the release name)
+##
+# nameOverride: ""
+
+## String to fully override chart.fullname template
+##
+# fullnameOverride: ""
+
+## Configure the controller manager deployment
+##
+manager:
   replicas: 1
 
   image:
@@ -158,73 +197,140 @@ controllerManager:
     tag: latest
     pullPolicy: IfNotPresent
 
-  # Environment variables from your deployment
+  ## Arguments
+  ##
+  args:
+    - --leader-elect
+
+  ## Environment variables
+  ##
   env:
     - name: BUSYBOX_IMAGE
       value: busybox:1.36.1
     - name: MEMCACHED_IMAGE
       value: memcached:1.6.26-alpine3.19
 
-  # Pod-level security settings
+  ## Image pull secrets
+  ##
+  imagePullSecrets: []
+  # Example:
+  # imagePullSecrets:
+  #   - name: myregistrykey
+
+  ## Pod-level security settings
+  ##
   podSecurityContext:
     runAsNonRoot: true
     seccompProfile:
-      type: RuntimeDefault
+        type: RuntimeDefault
 
-  # Container-level security settings
+  ## Container-level security settings
+  ##
   securityContext:
     allowPrivilegeEscalation: false
     capabilities:
-      drop:
-        - ALL
+        drop:
+            - ALL
     readOnlyRootFilesystem: true
 
-  # Resource limits and requests
+  ## Resource limits and requests
+  ##
   resources:
     limits:
-      cpu: 500m
-      memory: 128Mi
+        cpu: 500m
+        memory: 128Mi
     requests:
-      cpu: 10m
-      memory: 64Mi
+        cpu: 10m
+        memory: 64Mi
 
-# Essential RBAC permissions (required for controller operation)
-# These include ServiceAccount, controller permissions, leader election, and metrics access
-# Note: Essential RBAC is always enabled as it's required for the controller to function
+  ## Manager pod's affinity
+  ##
+  affinity: {}
+  # Example:
+  # affinity:
+  #   nodeAffinity:
+  #     requiredDuringSchedulingIgnoredDuringExecution:
+  #       nodeSelectorTerms:
+  #         - matchExpressions:
+  #           - key: kubernetes.io/arch
+  #             operator: In
+  #             values:
+  #               - amd64
+  #               - arm64
 
-# Extra labels applied to all rendered manifests
-commonLabels: {}
+  ## Manager pod's node selector
+  ##
+  nodeSelector: {}
+  # Example:
+  # nodeSelector:
+  #   kubernetes.io/os: linux
+  #   disktype: ssd
 
-# Helper RBAC roles for managing custom resources
-# These provide convenient admin/editor/viewer roles for each CRD type
-# Useful for giving users different levels of access to your custom resources
+  ## Manager pod's tolerations
+  ##
+  tolerations: []
+  # Example:
+  # tolerations:
+  #   - key: "node.kubernetes.io/unreachable"
+  #     operator: "Exists"
+  #     effect: "NoExecute"
+  #     tolerationSeconds: 6000
+
+## Helper RBAC roles for managing custom resources
+##
 rbacHelpers:
-  enable: false  # Install convenience admin/editor/viewer roles for CRDs
+  # Install convenience admin/editor/viewer roles for CRDs
+  enable: false
 
-# Custom Resource Definitions
+## Custom Resource Definitions
+##
 crd:
-  enable: true  # Install CRDs with the chart
-  keep: true    # Keep CRDs when uninstalling
+  # Install CRDs with the chart
+  enable: true
+  # Keep CRDs when uninstalling
+  keep: true
 
-# Controller metrics endpoint.
-# Enable to expose /metrics endpoint with RBAC protection.
+## Controller metrics endpoint.
+## Enable to expose /metrics endpoint with RBAC protection.
+##
 metrics:
   enable: true
+  # Metrics server port
+  port: 8443
 
-# Cert-manager integration for TLS certificates.
-# Required for webhook certificates and metrics endpoint certificates.
+## Cert-manager integration for TLS certificates.
+## Required for webhook certificates and metrics endpoint certificates.
+##
 certManager:
   enable: true
 
-# Prometheus ServiceMonitor for metrics scraping.
-# Requires prometheus-operator to be installed in the cluster.
+## Webhook server configuration
+##
+webhook:
+  enable: true
+  # Webhook server port
+  port: 9443
+
+## Prometheus ServiceMonitor for metrics scraping.
+## Requires prometheus-operator to be installed in the cluster.
+##
 prometheus:
   enable: false
 ```
 
-### Installation Tip
+### Installation
 
-Install the chart into a namespace using Helm flags (the chart does not create namespaces):
+The first time you run the plugin, it adds convenient Helm deployment targets to your `Makefile`:
+
+```shell
+make helm-deploy IMG=<registry>/<project:tag>  # Deploy/upgrade the chart
+make helm-status                                # Check release status
+make helm-history                               # View release history
+make helm-rollback                              # Rollback to previous version
+make helm-uninstall                             # Remove the release
+```
+
+You can also install manually using Helm commands:
 
 ```shell
 helm install my-release ./dist/chart \
@@ -232,13 +338,15 @@ helm install my-release ./dist/chart \
   --create-namespace
 ```
 
+The Makefile targets use sensible defaults extracted from your project configuration (namespace from manifests, release name from project name, chart directory from `--output-dir` flag).
+
 ## Flags
 
 | Flag                | Description                                                                 |
 |---------------------|-----------------------------------------------------------------------------|
 | **--manifests**     | Path to YAML file containing Kubernetes manifests (default: `dist/install.yaml`) |
 | **--output-dir** string | Output directory for chart (default: `dist`)                                |
-| **--force**         | Overwrites preserved files (`values.yaml`, `Chart.yaml`, `_helpers.tpl`)    |
+| **--force**         | Regenerates preserved files except `Chart.yaml` (`values.yaml`, `NOTES.txt`, `_helpers.tpl`, `.helmignore`, `test-chart.yml`) |
 
 <aside class="note">
 <H1> Examples </H1>

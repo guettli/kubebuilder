@@ -21,7 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	hackutils "sigs.k8s.io/kubebuilder/v4/hack/docs/utils"
+	hackutils "sigs.k8s.io/kubebuilder/v4/hack/docs/internal/utils"
 	pluginutil "sigs.k8s.io/kubebuilder/v4/pkg/plugin/util"
 	"sigs.k8s.io/kubebuilder/v4/test/e2e/utils"
 )
@@ -154,7 +154,7 @@ func (sp *Sample) updateController() {
 		filepath.Join(sp.ctx.Dir, pathFile),
 		"// +kubebuilder:rbac:groups=cache.example.com,resources=memcacheds/finalizers,verbs=update",
 		`
-// +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch`,
 	)
@@ -304,7 +304,7 @@ const controllerReconcileImplementation = `// Fetch the Memcached instance
 		if apierrors.IsNotFound(err) {
 			// If the custom resource is not found then it usually means that it was deleted or not created
 			// In this way, we will stop the reconciliation
-			log.Info("memcached resource not found. Ignoring since object must be deleted")
+			log.Info("Memcached resource not found. Ignoring since object must be deleted")
 			return ctrl.Result{}, nil
 		}
 		// Error reading the object - requeue the request.

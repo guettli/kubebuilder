@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"strings"
 
-	"sigs.k8s.io/kubebuilder/v4/pkg/internal/validation"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // Resource contains the information required to scaffold files for a resource.
@@ -159,16 +159,16 @@ func (r Resource) Copy() Resource {
 func (r *Resource) Update(other Resource) error {
 	// If self is nil, return an error
 	if r == nil {
-		return fmt.Errorf("unable to update a nil Resource")
+		return fmt.Errorf("cannot update a nil resource")
 	}
 
 	// Make sure we are not merging resources for different GVKs.
 	if !r.IsEqualTo(other.GVK) {
-		return fmt.Errorf("unable to update a Resource (GVK %+v) with another with non-matching GVK %+v", r.GVK, other.GVK)
+		return fmt.Errorf("cannot update a resource (GVK %+v) with another with non-matching GVK %+v", r.GVK, other.GVK)
 	}
 
 	if r.Plural != other.Plural {
-		return fmt.Errorf("unable to update Resource (Plural %q) with another with non-matching Plural %q",
+		return fmt.Errorf("cannot update resource (Plural %q) with another with non-matching Plural %q",
 			r.Plural, other.Plural)
 	}
 
@@ -176,7 +176,7 @@ func (r *Resource) Update(other Resource) error {
 		if r.Path == "" {
 			r.Path = other.Path
 		} else {
-			return fmt.Errorf("unable to update Resource (Path %q) with another with non-matching Path %q", r.Path, other.Path)
+			return fmt.Errorf("cannot update resource (Path %q) with another with non-matching Path %q", r.Path, other.Path)
 		}
 	}
 
@@ -205,7 +205,7 @@ func wrapKey(key string) string {
 
 // Replacer returns a strings.Replacer that replaces resource keywords with values.
 func (r Resource) Replacer() *strings.Replacer {
-	var replacements []string
+	replacements := make([]string, 0, 10)
 
 	replacements = append(replacements, wrapKey("group"), r.Group)
 	replacements = append(replacements, wrapKey("version"), r.Version)

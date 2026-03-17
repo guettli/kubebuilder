@@ -37,6 +37,7 @@ function convert_to_tools_ver {
   "1.32") echo "1.32.0";;
   "1.33") echo "1.33.0";;
   "1.34") echo "1.34.0";;
+  "1.35") echo "1.35.0";;
   *)
     echo "k8s version $k8s_ver not supported"
     exit 1
@@ -47,6 +48,10 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+# Force a static development version for ALL scripts that source common.sh.
+# This ensures PROJECT files in both /testdata and /docs remain consistent.
+export KUBEBUILDER_TEST_VERSION="(devel)"
+
 # Enable tracing in this script off by setting the TRACE variable in your
 # environment to any value:
 #
@@ -56,7 +61,7 @@ if [ -n "$TRACE" ]; then
   set -x
 fi
 
-export KIND_K8S_VERSION="${KIND_K8S_VERSION:-"v1.34.0"}"
+export KIND_K8S_VERSION="${KIND_K8S_VERSION:-"v1.35.0"}"
 tools_k8s_version=$(convert_to_tools_ver "${KIND_K8S_VERSION#v*}")
 kind_version=0.29.0
 goarch=amd64

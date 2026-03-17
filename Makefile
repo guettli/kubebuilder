@@ -50,19 +50,9 @@ help: ## Display this help
 
 ##@ Build
 
-K8S_VERSION ?= $(shell go list -m -modfile=./testdata/project-v4/go.mod -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d.%d", $$3, $$4}')
-
-LD_FLAGS=-ldflags " \
-    -X sigs.k8s.io/kubebuilder/v4/cmd.kubeBuilderVersion=$(shell git describe --tags --dirty --broken) \
-    -X sigs.k8s.io/kubebuilder/v4/cmd.kubernetesVendorVersion=$(K8S_VERSION) \
-    -X sigs.k8s.io/kubebuilder/v4/cmd.goos=$(shell go env GOOS) \
-    -X sigs.k8s.io/kubebuilder/v4/cmd.goarch=$(shell go env GOARCH) \
-    -X sigs.k8s.io/kubebuilder/v4/cmd.gitCommit=$(shell git rev-parse HEAD) \
-    -X sigs.k8s.io/kubebuilder/v4/cmd.buildDate=$(shell date -u +'%Y-%m-%dT%H:%M:%SZ') \
-    "
 .PHONY: build
 build: ## Build the project locally
-	go build $(LD_FLAGS) -o bin/kubebuilder
+	go build --trimpath -o bin/kubebuilder
 
 .PHONY: install
 install: build ## Build and install the binary with the current source code. Use it to test your changes locally.
@@ -72,7 +62,7 @@ install: build ## Build and install the binary with the current source code. Use
 ##@ Development
 
 .PHONY: generate
-generate: generate-testdata generate-docs update-k8s-version ## Update/generate all mock data. You should run this commands to update the mock data after your changes.
+generate: generate-testdata generate-docs ## Update/generate all mock data. You should run this commands to update the mock data after your changes.
 	go mod tidy
 	make remove-spaces
 
@@ -114,7 +104,7 @@ check-docs: ## Run the script to ensure that the docs are updated
 	./hack/docs/check.sh
 
 .PHONY: lint
-lint: golangci-lint yamllint ## Run golangci-lint linter & yamllint
+lint: golangci-lint yamllint check-sample-permissions ## Run golangci-lint linter, yamllint & sample permissions check
 	$(GOLANGCI_LINT) run
 
 .PHONY: lint-fix
@@ -125,10 +115,36 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	$(GOLANGCI_LINT) config verify
 
-.PHONY: yamllint
-yamllint:
-	@files=$$(find testdata -name '*.yaml' ! -path 'testdata/*/dist/*'); \
-    	docker run --rm $$(tty -s && echo "-it" || echo) -v $(PWD):/data cytopia/yamllint:latest $$files -d "{extends: relaxed, rules: {line-length: {max: 120}}}" --no-warnings
+# Lint all YAML: testdata files (yamllint-yaml) + Helm-rendered charts (yamllint-helm).
+# Repo YAML uses .yamllint; Helm output uses .yamllint-helm.
+YAMLLINT_FILES := $(shell find testdata -name '*.yaml' ! -path 'testdata/.helm-rendered.yaml' \( ! -path 'testdata/*/dist/*' -o -path 'testdata/*/dist/chart/Chart.yaml' -o -path 'testdata/*/dist/chart/values.yaml' \) 2>/dev/null)
+HELM_CHARTS := $(shell find testdata docs/book -type d -path '*/dist/chart' 2>/dev/null)
+
+.PHONY: yamllint yamllint-yaml yamllint-helm
+yamllint: yamllint-yaml yamllint-helm
+
+yamllint-yaml:
+	@docker run --rm $$(tty -s && echo "-it" || echo) -v $(PWD):/data -w /data cytopia/yamllint:latest $(YAMLLINT_FILES) -c .yamllint --no-warnings
+
+yamllint-helm:
+	@for chart in $(HELM_CHARTS); do \
+	  helm template release $$chart --namespace=release-system 2>/dev/null | \
+	  docker run --rm -i -v $(PWD):/data -w /data cytopia/yamllint:latest -c .yamllint-helm --no-warnings - || (echo "yamllint-helm: $$chart failed"; exit 1); \
+	done
+
+# All Kubebuilder-generated samples (go/v4, kustomize, helm use machinery defaults 0755/0644).
+SAMPLE_ROOTS := testdata \
+	docs/book/src/getting-started/testdata \
+	docs/book/src/cronjob-tutorial/testdata \
+	docs/book/src/multiversion-tutorial/testdata
+
+.PHONY: check-sample-permissions
+check-sample-permissions: ## Fail if any file/dir under testdata or docs samples has wrong permissions (expect 0644/0755). bin/ excluded.
+	@for d in $(SAMPLE_ROOTS); do \
+		test -d "$$d" || continue; \
+		bad=$$(find "$$d" -path '*/bin' -prune -o \( \( -type f ! -perm 0644 \) -o \( -type d ! -perm 0755 \) \) -print 2>/dev/null); \
+		if [ -n "$$bad" ]; then echo "Invalid permissions under $$d (expect 0644/0755):"; echo "$$bad"; exit 1; fi; \
+	done
 
 .PHONY: golangci-lint
 golangci-lint:
@@ -145,7 +161,7 @@ go-apidiff:
 ##@ Tests
 
 .PHONY: test
-test: test-unit test-integration test-testdata test-book test-license ## Run the unit and integration tests (used in the CI)
+test: test-unit test-integration test-testdata test-book test-license test-gomod ## Run the unit and integration tests (used in the CI)
 
 .PHONY: test-unit
 TEST_PKGS := ./pkg/... ./test/e2e/utils/...
@@ -159,7 +175,24 @@ test-integration: install ## Run the integration tests (requires kubebuilder bin
 .PHONY: test-coverage
 test-coverage: ## Run unit and integration tests with coverage report
 	- rm -rf *.out  # Remove all coverage files if exists
-	go test -race -failfast -tags=integration -timeout 30m -coverprofile=coverage-all.out -coverpkg="./pkg/cli/...,./pkg/config/...,./pkg/internal/...,./pkg/machinery/...,./pkg/model/...,./pkg/plugin/...,./pkg/plugins/golang/...,./pkg/plugins/external/...,./pkg/plugins/optional/grafana/...,./pkg/plugins/optional/helm/v2alpha/..." $(TEST_PKGS)
+	go test -race -failfast -tags=integration -timeout 30m \
+		-coverprofile=coverage-all.out \
+		-coverpkg="\
+./pkg/cli/...,\
+./pkg/config/...,\
+./pkg/internal/...,\
+./pkg/machinery/...,\
+./pkg/model/...,\
+./pkg/plugin/...,\
+./pkg/plugins/golang,\
+./pkg/plugins/golang/deploy-image/v1alpha1,\
+./pkg/plugins/golang/v4,\
+./pkg/plugins/external/...,\
+./pkg/plugins/common/kustomize/v2,\
+./pkg/plugins/optional/autoupdate/v1alpha,\
+./pkg/plugins/optional/grafana/...,\
+./pkg/plugins/optional/helm/v2alpha/..." \
+		$(TEST_PKGS)
 
 .PHONY: check-testdata
 check-testdata: ## Run the script to ensure that the testdata is updated
@@ -188,6 +221,10 @@ test-book: ## Run the cronjob tutorial's unit tests to make sure we don't break 
 test-license:  ## Run the license check
 	./test/check-license.sh
 
+.PHONY: test-gomod
+test-gomod:  ## Run the Go module compatibility check
+	go run ./hack/test/check_go_module.go
+
 .PHONY: test-external-plugin
 test-external-plugin: install  ## Run tests for external plugin
 	make -C docs/book/src/simple-external-plugin-tutorial/testdata/sampleexternalplugin/v1 install
@@ -206,30 +243,19 @@ test-legacy:  ## Run the tests to validate legacy path for webhooks
 
 .PHONY: install-helm
 install-helm: ## Install the latest version of Helm locally
-	@curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+	@curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-4 | bash
 
 .PHONY: helm-lint
 helm-lint: install-helm ## Lint the Helm chart in testdata
 	helm lint testdata/project-v4-with-plugins/dist/chart
-
-.PHONY: update-k8s-version
-update-k8s-version: ## Update Kubernetes API version in version.go and .goreleaser.yml
-	@if [ -z "$(K8S_VERSION)" ]; then echo "Error: K8S_VERSION is empty"; exit 1; fi
-	@echo "Updating Kubernetes version to $(K8S_VERSION)"
-	@# Update version.go
-	@sed -i.bak 's/kubernetesVendorVersion = .*/kubernetesVendorVersion = "$(K8S_VERSION)"/' cmd/version.go
-	@# Update .goreleaser.yml
-	@sed -i.bak 's/KUBERNETES_VERSION=.*/KUBERNETES_VERSION=$(K8S_VERSION)/' build/.goreleaser.yml
-	@# Clean up backup files
-	@find . -name "*.bak" -type f -delete
 
 ## Tool Binaries
 GO_APIDIFF ?= $(LOCALBIN)/go-apidiff
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 
 ## Tool Versions
-GO_APIDIFF_VERSION ?= v0.6.1
-GOLANGCI_LINT_VERSION ?= v2.5.0
+GO_APIDIFF_VERSION ?= v0.8.3
+GOLANGCI_LINT_VERSION ?= v2.8.0
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary

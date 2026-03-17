@@ -1,5 +1,5 @@
 /* Adds a thin border to the sidebar (aesthetics) */
-#sidebar {
+#mdbook-sidebar {
     border-right: 1px solid var(--theme-popup-border);
 }
 
@@ -36,11 +36,18 @@ html {
     text-decoration: solid underline var(--links);
 }
 
+/* Hides excessive theme options */
+#mdbook-theme-default_theme,
+#mdbook-theme-rust,
+#mdbook-theme-coal,
+#mdbook-theme-ayu {
+    display: none;
+}
+
 /* custom light theme */
 .light {
     --sidebar-bg: #eef5ff;
     --sidebar-fg: #334155;
     --sidebar-non-existant: #7b8da8;
-    --sidebar-active: #466bb3;
     --sidebar-spacer: #c9d3e0;
 }

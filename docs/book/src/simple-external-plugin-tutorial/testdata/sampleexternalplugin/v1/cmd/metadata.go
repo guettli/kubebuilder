@@ -24,12 +24,16 @@ import (
 	"sigs.k8s.io/kubebuilder/v4/pkg/plugin/external"
 )
 
-// metadataCmd handles all the logic for the `metadata` subcommand of the sample external plugin.
-// In Kubebuilder's Phase 2 Plugins the `metadata` subcommand is an optional subcommand for
-// external plugins to support. The `metadata` subcommand allows for an external plugin
-// to provide Kubebuilder with a description of the plugin and examples for each of the
-// `init`, `create api`, `create webhook`, and `edit` subcommands. This allows Kubebuilder
-// to provide users a native Kubebuilder plugin look and feel for an external plugin.
+// metadataCmd handles the "metadata" subcommand.
+//
+// PURPOSE: Provide help text and examples for each subcommand.
+// This information appears in `kubebuilder <subcommand> --help` output.
+//
+// FLOW:
+// 1. User runs: kubebuilder init --help
+// 2. Kubebuilder calls each plugin with: {"command":"metadata","args":["--init"]}
+// 3. Plugin returns description and examples for init
+// 4. Kubebuilder displays combined help from all plugins
 func metadataCmd(pr *external.PluginRequest) external.PluginResponse {
 	pluginResponse := external.PluginResponse{
 		APIVersion: "v1alpha1",
@@ -37,11 +41,10 @@ func metadataCmd(pr *external.PluginRequest) external.PluginResponse {
 		Universe:   pr.Universe,
 	}
 
-	// Here is an example of parsing multiple flags from a Kubebuilder external plugin request
+	// Parse which subcommand's metadata is being requested
 	flagsToParse := pflag.NewFlagSet("flagsFlags", pflag.ContinueOnError)
 	flagsToParse.Bool("init", false, "sets the init flag to true")
-	flagsToParse.Bool("api", false, "sets the api flag to true")
-	flagsToParse.Bool("webhook", false, "sets the webhook flag to true")
+	flagsToParse.Bool("edit", false, "sets the edit flag to true")
 
 	if err := flagsToParse.Parse(pr.Args); err != nil {
 		pluginResponse.Error = true
@@ -52,25 +55,17 @@ func metadataCmd(pr *external.PluginRequest) external.PluginResponse {
 	}
 
 	initFlag, _ := flagsToParse.GetBool("init")
-	apiFlag, _ := flagsToParse.GetBool("api")
-	webhookFlag, _ := flagsToParse.GetBool("webhook")
+	editFlag, _ := flagsToParse.GetBool("edit")
 
-	// The Phase 2 Plugins implementation will only ever pass a single boolean flag
-	// argument in the JSON request `args` field. The flag will be `--init` if it is
-	// attempting to get the flags for the `init` subcommand, `--api` for `create api`,
-	// `--webhook` for `create webhook`, and `--edit` for `edit`
+	// Return metadata for the requested subcommand
 	if initFlag {
-		// Populate the JSON response `metadata` field with a description
-		// and examples for the `init` subcommand
 		pluginResponse.Metadata = scaffolds.InitMeta
-	} else if apiFlag {
-		pluginResponse.Metadata = scaffolds.ApiMeta
-	} else if webhookFlag {
-		pluginResponse.Metadata = scaffolds.WebhookMeta
+	} else if editFlag {
+		pluginResponse.Metadata = scaffolds.EditMeta
 	} else {
 		pluginResponse.Error = true
 		pluginResponse.ErrorMsgs = []string{
-			"unrecognized flag",
+			"no subcommand flag provided; expected --init or --edit",
 		}
 	}
 

@@ -22,6 +22,7 @@ import (
 	log "log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"sigs.k8s.io/kubebuilder/v4/pkg/machinery"
 )
@@ -31,7 +32,10 @@ var (
 	_ machinery.Inserter = &WebhookTestUpdater{}
 )
 
-const webhookChecksMarker = "e2e-webhooks-checks"
+const (
+	webhookChecksMarker           = "e2e-webhooks-checks"
+	metricsWebhookReadinessMarker = "e2e-metrics-webhooks-readiness"
+)
 
 // Test defines the basic setup for the e2e test
 type Test struct {
@@ -75,12 +79,16 @@ func (*WebhookTestUpdater) GetIfExistsAction() machinery.IfExistsAction {
 func (f *WebhookTestUpdater) GetMarkers() []machinery.Marker {
 	return []machinery.Marker{
 		machinery.NewMarkerFor(f.GetPath(), webhookChecksMarker),
+		machinery.NewMarkerFor(f.GetPath(), metricsWebhookReadinessMarker),
 	}
 }
 
 // GetCodeFragments implements file.Inserter
 func (f *WebhookTestUpdater) GetCodeFragments() machinery.CodeFragmentsMap {
-	if !f.WireWebhook {
+	// Check if any webhook type exists (defaulting, validation, or conversion)
+	hasAnyWebhook := f.WireWebhook || (f.Resource != nil && f.Resource.HasConversionWebhook())
+
+	if !hasAnyWebhook {
 		return nil
 	}
 
@@ -99,36 +107,75 @@ func (f *WebhookTestUpdater) GetCodeFragments() machinery.CodeFragmentsMap {
 	markers := f.GetMarkers()
 
 	for _, marker := range markers {
-		if !bytes.Contains(content, []byte(marker.String())) {
+		markerStr := marker.String()
+		if !bytes.Contains(content, []byte(markerStr)) {
 			log.Warn("Marker not found in file, skipping webhook test code injection",
-				"marker", marker.String(),
+				"marker", markerStr,
 				"file_path", filePath)
 			continue // skip this marker
 		}
 
-		var fragments []string
-		fragments = append(fragments, webhookChecksFragment)
+		switch {
+		case strings.Contains(markerStr, webhookChecksMarker):
+			var fragments []string
+			fragments = append(fragments, webhookChecksFragment)
 
-		if f.Resource != nil && f.Resource.HasDefaultingWebhook() {
-			mutatingWebhookCode := fmt.Sprintf(mutatingWebhookChecksFragment, f.ProjectName)
-			fragments = append(fragments, mutatingWebhookCode)
+			if f.Resource != nil && f.Resource.HasDefaultingWebhook() {
+				mutatingWebhookCode := fmt.Sprintf(mutatingWebhookChecksFragment, f.ProjectName)
+				fragments = append(fragments, mutatingWebhookCode)
+			}
+
+			if f.Resource != nil && f.Resource.HasValidationWebhook() {
+				validatingWebhookCode := fmt.Sprintf(validatingWebhookChecksFragment, f.ProjectName)
+				fragments = append(fragments, validatingWebhookCode)
+			}
+
+			if f.Resource != nil && f.Resource.HasConversionWebhook() {
+				conversionWebhookCode := fmt.Sprintf(
+					conversionWebhookChecksFragment,
+					f.Resource.Kind,
+					f.Resource.Plural+"."+f.Resource.Group+"."+f.Resource.Domain,
+				)
+				fragments = append(fragments, conversionWebhookCode)
+			}
+
+			if len(fragments) > 0 {
+				codeFragments[marker] = fragments
+			}
+		case strings.Contains(markerStr, metricsWebhookReadinessMarker):
+			// Readiness checks only for defaulting/validation webhooks (they use webhook service)
+			// Conversion webhooks don't need separate webhook service readiness checks
+			if f.WireWebhook {
+				// Skip if webhook readiness checks are already present
+				// This prevents duplicate insertion when multiple webhooks are scaffolded
+				if strings.Contains(string(content), "waiting for the webhook service endpoints to be ready") {
+					continue
+				}
+
+				webhookServiceName := fmt.Sprintf("%s-webhook-service", f.ProjectName)
+				var fragments []string
+
+				// Add endpoint readiness check (applies to all webhook types)
+				fragments = append(fragments, fmt.Sprintf(webhookEndpointsReadinessFragment, webhookServiceName))
+
+				// Add mutating webhook configuration check if defaulting webhooks exist
+				if f.Resource != nil && f.Resource.HasDefaultingWebhook() {
+					fragments = append(fragments, fmt.Sprintf(mutatingWebhookReadinessFragment, f.ProjectName))
+				}
+
+				// Add validating webhook configuration check if validation webhooks exist
+				if f.Resource != nil && f.Resource.HasValidationWebhook() {
+					fragments = append(fragments, fmt.Sprintf(validatingWebhookReadinessFragment, f.ProjectName))
+				}
+
+				// Add stabilization wait at the end
+				fragments = append(fragments, webhookStabilizationFragment)
+
+				if len(fragments) > 0 {
+					codeFragments[marker] = fragments
+				}
+			}
 		}
-
-		if f.Resource != nil && f.Resource.HasValidationWebhook() {
-			validatingWebhookCode := fmt.Sprintf(validatingWebhookChecksFragment, f.ProjectName)
-			fragments = append(fragments, validatingWebhookCode)
-		}
-
-		if f.Resource != nil && f.Resource.HasConversionWebhook() {
-			conversionWebhookCode := fmt.Sprintf(
-				conversionWebhookChecksFragment,
-				f.Resource.Kind,
-				f.Resource.Plural+"."+f.Resource.Group+"."+f.Resource.Domain,
-			)
-			fragments = append(fragments, conversionWebhookCode)
-		}
-
-		codeFragments[marker] = fragments
 	}
 
 	if len(codeFragments) == 0 {
@@ -198,6 +245,50 @@ const conversionWebhookChecksFragment = `It("should have CA injection for %[1]s 
 
 `
 
+const webhookEndpointsReadinessFragment = `By("waiting for the webhook service endpoints to be ready")
+	verifyWebhookEndpointsReady := func(g Gomega) {
+		cmd := exec.Command("kubectl", "get", "endpointslices.discovery.k8s.io", "-n", namespace,
+			"-l", "kubernetes.io/service-name=%s",
+			"-o", "jsonpath={range .items[*]}{range .endpoints[*]}{.addresses[*]}{end}{end}")
+		output, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred(), "Webhook endpoints should exist")
+		g.Expect(output).ShouldNot(BeEmpty(), "Webhook endpoints not yet ready")
+	}
+	Eventually(verifyWebhookEndpointsReady, 3*time.Minute, time.Second).Should(Succeed())
+
+`
+
+const mutatingWebhookReadinessFragment = `By("verifying the mutating webhook server is ready")
+	verifyMutatingWebhookReady := func(g Gomega) {
+		cmd := exec.Command("kubectl", "get", "mutatingwebhookconfigurations.admissionregistration.k8s.io",
+			"%s-mutating-webhook-configuration",
+			"-o", "jsonpath={.webhooks[0].clientConfig.caBundle}")
+		output, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred(), "MutatingWebhookConfiguration should exist")
+		g.Expect(output).ShouldNot(BeEmpty(), "Mutating webhook CA bundle not yet injected")
+	}
+	Eventually(verifyMutatingWebhookReady, 3*time.Minute, time.Second).Should(Succeed())
+
+`
+
+const validatingWebhookReadinessFragment = `By("verifying the validating webhook server is ready")
+	verifyValidatingWebhookReady := func(g Gomega) {
+		cmd := exec.Command("kubectl", "get", "validatingwebhookconfigurations.admissionregistration.k8s.io",
+			"%s-validating-webhook-configuration",
+			"-o", "jsonpath={.webhooks[0].clientConfig.caBundle}")
+		output, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred(), "ValidatingWebhookConfiguration should exist")
+		g.Expect(output).ShouldNot(BeEmpty(), "Validating webhook CA bundle not yet injected")
+	}
+	Eventually(verifyValidatingWebhookReady, 3*time.Minute, time.Second).Should(Succeed())
+
+`
+
+const webhookStabilizationFragment = `By("waiting additional time for webhook server to stabilize")
+	time.Sleep(5 * time.Second)
+
+`
+
 var testCodeTemplate = `//go:build e2e
 // +build e2e
 
@@ -252,7 +343,7 @@ var _ = Describe("Manager", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
 		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
+		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 	})
@@ -375,24 +466,27 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(token).NotTo(BeEmpty())
 
-			By("waiting for the metrics endpoint to be ready")
-			verifyMetricsEndpointReady := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "endpoints", metricsServiceName, "-n", namespace)
+			By("ensuring the controller pod is ready")
+			verifyControllerPodReady := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "pod", controllerPodName, "-n", namespace,
+					"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring("8443"), "Metrics endpoint is not ready")
+				g.Expect(output).To(Equal("True"), "Controller pod not ready")
 			}
-			Eventually(verifyMetricsEndpointReady).Should(Succeed())
+			Eventually(verifyControllerPodReady, 3*time.Minute, time.Second).Should(Succeed())
 
 			By("verifying that the controller manager is serving the metrics server")
 			verifyMetricsServerStarted := func(g Gomega) {
 				cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring("controller-runtime.metrics\tServing metrics server"),
+				g.Expect(output).To(ContainSubstring("Serving metrics server"),
  					"Metrics server not yet started")
 			}
-			Eventually(verifyMetricsServerStarted).Should(Succeed())
+			Eventually(verifyMetricsServerStarted, 3*time.Minute, time.Second).Should(Succeed())
+
+			// +kubebuilder:scaffold:e2e-metrics-webhooks-readiness
 
 			By("creating the curl-metrics pod to access the metrics endpoint")
 			cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
@@ -405,7 +499,12 @@ var _ = Describe("Manager", Ordered, func() {
 							"name": "curl",
 							"image": "curlimages/curl:latest",
 							"command": ["/bin/sh", "-c"],
-							"args": ["curl -v -k -H 'Authorization: Bearer %s' https://%s.%s.svc.cluster.local:8443/metrics"],
+							"args": [
+								"for i in $(seq 1 30); do ` +
+	`curl -v -k -H 'Authorization: Bearer %s' ` +
+	`https://%s.%s.svc.cluster.local:8443/metrics ` +
+	`&& exit 0 || sleep 2; done; exit 1"
+							],
 							"securityContext": {
 								"readOnlyRootFilesystem": true,
 								"allowPrivilegeEscalation": false,

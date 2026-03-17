@@ -66,6 +66,7 @@ type Cfg struct {
 
 	// Boolean fields
 	MultiGroup bool `json:"multigroup,omitempty"`
+	Namespaced bool `json:"namespaced,omitempty"`
 
 	// Resources
 	Resources []resource.Resource `json:"resources,omitempty"`
@@ -78,7 +79,7 @@ type Cfg struct {
 type pluginConfigs map[string]pluginConfig
 
 // pluginConfig is an arbitrary plugin configuration object.
-type pluginConfig interface{}
+type pluginConfig any
 
 // New returns a new config.Config
 func New() config.Config {
@@ -163,6 +164,23 @@ func (c *Cfg) SetMultiGroup() error {
 // ClearMultiGroup implements config.Config
 func (c *Cfg) ClearMultiGroup() error {
 	c.MultiGroup = false
+	return nil
+}
+
+// IsNamespaced implements config.Config
+func (c Cfg) IsNamespaced() bool {
+	return c.Namespaced
+}
+
+// SetNamespaced implements config.Config
+func (c *Cfg) SetNamespaced() error {
+	c.Namespaced = true
+	return nil
+}
+
+// ClearNamespaced implements config.Config
+func (c *Cfg) ClearNamespaced() error {
+	c.Namespaced = false
 	return nil
 }
 
@@ -309,7 +327,7 @@ func (c Cfg) ListWebhookVersions() []string {
 }
 
 // DecodePluginConfig implements config.Config
-func (c Cfg) DecodePluginConfig(key string, configObj interface{}) error {
+func (c Cfg) DecodePluginConfig(key string, configObj any) error {
 	if len(c.Plugins) == 0 {
 		return config.PluginKeyNotFoundError{Key: key}
 	}
@@ -330,13 +348,13 @@ func (c Cfg) DecodePluginConfig(key string, configObj interface{}) error {
 }
 
 // EncodePluginConfig will return an error if used on any project version < v3.
-func (c *Cfg) EncodePluginConfig(key string, configObj interface{}) error {
+func (c *Cfg) EncodePluginConfig(key string, configObj any) error {
 	// Get object's bytes and set them under key in extra fields.
 	b, err := yaml.Marshal(configObj)
 	if err != nil {
 		return fmt.Errorf("failed to convert %T object to bytes: %w", configObj, err)
 	}
-	var fields map[string]interface{}
+	var fields map[string]any
 	if err := yaml.Unmarshal(b, &fields); err != nil {
 		return fmt.Errorf("failed to unmarshal %T object bytes: %w", configObj, err)
 	}

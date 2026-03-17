@@ -19,10 +19,12 @@ package machinery
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	log "log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/template"
 
@@ -36,8 +38,11 @@ import (
 const (
 	createOrUpdate = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 
-	defaultDirectoryPermission os.FileMode = 0o700
-	defaultFilePermission      os.FileMode = 0o600
+	// DefaultDirectoryPermission and DefaultFilePermission are used so generated
+	// files work in shared and container workflows. Use them when writing scaffolded
+	// or config files for consistency.
+	DefaultDirectoryPermission os.FileMode = 0o755
+	DefaultFilePermission      os.FileMode = 0o644
 )
 
 var options = imports.Options{
@@ -67,8 +72,8 @@ type ScaffoldOption func(*Scaffold)
 func NewScaffold(fs Filesystem, options ...ScaffoldOption) *Scaffold {
 	s := &Scaffold{
 		fs:       fs.FS,
-		dirPerm:  defaultDirectoryPermission,
-		filePerm: defaultFilePermission,
+		dirPerm:  DefaultDirectoryPermission,
+		filePerm: DefaultFilePermission,
 	}
 
 	for _, option := range options {
@@ -237,12 +242,12 @@ func doTemplate(t Template) ([]byte, error) {
 func (s Scaffold) updateFileModel(i Inserter, models map[string]*File) error {
 	m, err := s.loadPreviousModel(i, models)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			if withOptionalBehavior, ok := i.(HasIfNotExistsAction); ok {
 				switch withOptionalBehavior.GetIfNotExistsAction() {
 				case IgnoreFile:
-					log.Warn("Skipping missing file", "file", i.GetPath())
-					log.Warn("The code fragments will not be inserted.")
+					log.Warn("skipping missing file", "file", i.GetPath())
+					log.Warn("the code fragments will not be inserted")
 					return nil
 				case ErrorIfNotExist:
 					return err
@@ -359,13 +364,7 @@ func getValidCodeFragments(i Inserter) CodeFragmentsMap {
 	// Validate the code fragments
 	validMarkers := i.GetMarkers()
 	for marker := range codeFragments {
-		valid := false
-		for _, validMarker := range validMarkers {
-			if marker == validMarker {
-				valid = true
-				break
-			}
-		}
+		valid := slices.Contains(validMarkers, marker)
 		if !valid {
 			delete(codeFragments, marker)
 		}
@@ -403,7 +402,7 @@ func filterExistingValues(content string, codeFragmentsMap CodeFragmentsMap) err
 func codeFragmentExists(content, codeFragment string) (exists bool, err error) {
 	// Trim space on each line in order to match different levels of indentation.
 	var sb strings.Builder
-	for _, line := range strings.Split(codeFragment, "\n") {
+	for line := range strings.SplitSeq(codeFragment, "\n") {
 		_, _ = sb.WriteString(strings.TrimSpace(line))
 		_ = sb.WriteByte('\n')
 	}
@@ -461,7 +460,7 @@ func scanMultiline(content string, scanLines int, scanFunc func(contentGroup str
 		bufferedLinesIndex = (bufferedLinesIndex + 1) % scanLines
 
 		sb.Reset()
-		for i := 0; i < scanLines; i++ {
+		for i := range scanLines {
 			_, _ = sb.WriteString(bufferedLines[(bufferedLinesIndex+i)%scanLines])
 			_ = sb.WriteByte('\n')
 		}

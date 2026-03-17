@@ -1,5 +1,5 @@
 /*
-Copyright 2025 The Kubernetes authors.
+Copyright 2026 The Kubernetes authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -54,7 +54,7 @@ const (
 type BusyboxReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // The following markers are used to generate the rules permissions (RBAC) on config/rbac using controller-gen
@@ -64,7 +64,7 @@ type BusyboxReconciler struct {
 // +kubebuilder:rbac:groups=example.com.testproject.org,resources=busyboxes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=example.com.testproject.org,resources=busyboxes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=example.com.testproject.org,resources=busyboxes/finalizers,verbs=update
-// +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 
@@ -78,7 +78,7 @@ type BusyboxReconciler struct {
 // For further info:
 // - About Operator Pattern: https://kubernetes.io/docs/concepts/extend-kubernetes/operator/
 // - About Controllers: https://kubernetes.io/docs/concepts/architecture/controller/
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
+// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.3/pkg/reconcile
 func (r *BusyboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -91,7 +91,7 @@ func (r *BusyboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if apierrors.IsNotFound(err) {
 			// If the custom resource is not found then it usually means that it was deleted or not created
 			// In this way, we will stop the reconciliation
-			log.Info("busybox resource not found. Ignoring since object must be deleted")
+			log.Info("Busybox resource not found, ignoring since object must be deleted")
 			return ctrl.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
@@ -121,7 +121,7 @@ func (r *BusyboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// occur before the custom resource is deleted.
 	// More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers
 	if !controllerutil.ContainsFinalizer(busybox, busyboxFinalizer) {
-		log.Info("Adding Finalizer for Busybox")
+		log.Info("Adding finalizer for Busybox")
 		controllerutil.AddFinalizer(busybox, busyboxFinalizer)
 		if err = r.Update(ctx, busybox); err != nil {
 			log.Error(err, "Failed to update custom resource to add finalizer")
@@ -134,7 +134,7 @@ func (r *BusyboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	isBusyboxMarkedToBeDeleted := busybox.GetDeletionTimestamp() != nil
 	if isBusyboxMarkedToBeDeleted {
 		if controllerutil.ContainsFinalizer(busybox, busyboxFinalizer) {
-			log.Info("Performing Finalizer Operations for Busybox before delete CR")
+			log.Info("Performing finalizer operations for Busybox before deleting CR")
 
 			// Let's add here a status "Downgrade" to reflect that this resource began its process to be terminated.
 			meta.SetStatusCondition(&busybox.Status.Conditions, metav1.Condition{Type: typeDegradedBusybox,
@@ -172,7 +172,7 @@ func (r *BusyboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				return ctrl.Result{}, err
 			}
 
-			log.Info("Removing Finalizer for Busybox after successfully perform the operations")
+			log.Info("Removing finalizer for Busybox after successfully performing the operations")
 			if ok := controllerutil.RemoveFinalizer(busybox, busyboxFinalizer); !ok {
 				err = fmt.Errorf("finalizer for Busybox was not removed")
 				log.Error(err, "Failed to remove finalizer for Busybox")
@@ -298,10 +298,10 @@ func (r *BusyboxReconciler) doFinalizerOperationsForBusybox(cr *examplecomv1alph
 	// More info: https://kubernetes.io/docs/tasks/administer-cluster/use-cascading-deletion/
 
 	// The following implementation will raise an event
-	r.Recorder.Event(cr, "Warning", "Deleting",
-		fmt.Sprintf("Custom Resource %s is being deleted from the namespace %s",
-			cr.Name,
-			cr.Namespace))
+	r.Recorder.Eventf(cr, nil, corev1.EventTypeWarning, "Deleting", "DeleteCR",
+		"Custom Resource %s is being deleted from the namespace %s",
+		cr.Name,
+		cr.Namespace)
 }
 
 // deploymentForBusybox returns a Busybox Deployment object
