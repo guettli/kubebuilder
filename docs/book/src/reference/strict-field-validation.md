@@ -1,3 +1,5 @@
+<!-- markdownlint-disable-file MD010 MD033 -->
+
 # Strict Field Validation
 
 ## Overview
@@ -9,6 +11,7 @@ By default, when your controller writes an object that contains fields not defin
 - May only log a warning
 
 This can hide bugs and version skew between:
+
 - The controller code (Go types) and
 - The CRD schema installed in the cluster
 
@@ -18,6 +21,11 @@ CRDs should be installed before controllers. However, during upgrades this can b
 
 When controllers and CRDs get out of sync, controller writes may fail with unknown field errors, status updates may not persist, and conversion webhooks can fail if the CRD schema is outdated. Controllers may crash-loop until CRDs are updated.
 
+## Avoid Updates
+
+Avoid `client.Update(...)` for controllers because it sends the full object and can overwrite fields owned by other actors or accidentally drop data during version skew.
+Prefer targeted writes with `client.Patch(...)` and `client.Status().Patch(...)` (for status) to update only the fields you intend to change.
+
 ## What does it solve
 
 Strict validation prevents silent failures when your controller code and CRD schemas get out of sync.
@@ -25,11 +33,13 @@ Strict validation prevents silent failures when your controller code and CRD sch
 For example, you add a new field `status.newField` to your controller, but the CRD in the cluster hasn't been updated yet. When the controller calls `client.Status().Patch(...)`:
 
 **Without strict validation:**
+
 - API server drops `status.newField` silently
 - Controller sees no error
 - Field never appears on the object - confusing debugging
 
 **With strict validation:**
+
 - API server returns clear error
 - Controller knows CRDs need updating
 - Fails fast instead of silent data loss
